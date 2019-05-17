@@ -6,7 +6,6 @@ extern crate log;
 use std::collections::HashMap;
 use std::io::Error as IoError;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -85,6 +84,9 @@ fn main() {
             .default_value("127.0.0.1:6767"))
         .arg(clap::Arg::with_name("data_path").long("data")
             .help("Key store directory")
+            .takes_value(true))
+        .arg(clap::Arg::with_name("import_path").long("import-keys")
+            .help("File to import keys from")
             .takes_value(true));
     let args = add_auth_args(app).get_matches();
     let address: SocketAddr = args.value_of("address").and_then(|address| match address.parse() {
@@ -94,22 +96,24 @@ fn main() {
             std::process::exit(1);
         },
     }).unwrap();
-    let key_store = args.value_of("data_path")
-        .and_then(|path| {
-            let password = rpassword::read_password_from_tty(Some("Key store password: ")).unwrap_or_else(|e| {
-                error!("Cannot read password {}", e);
+    let mut key_store = KeyStore::new(args.value_of("data_path"));
+    let import_keys: Option<Vec<Key>> = args.value_of("import_path")
+        .and_then(|import_path| Some(load_keys_from(import_path).unwrap_or_else(|e| {
+            error!("Cannot read keys: {}", e);
+            std::process::exit(1);
+        })));
+    if let Some(import_keys) = import_keys {
+        let count = import_keys.len();
+        for key in import_keys {
+            let arn = key.arn().arn_str().to_owned();
+            key_store.save(key).unwrap_or_else(|e| {
+                error!("Cannot import key {}: {}", arn, e);
                 std::process::exit(1);
             });
-            let path = Path::new(path);
-            KeyStore::new_with_persistance(path, password)
-                .map_err(|e| {
-                    error!("Cannot create key store: {}", e);
-                    std::process::exit(1);
-                })
-                .ok()
-        })
-        .or_else(|| Some(KeyStore::new_without_persistance()))
-        .expect("Cannot create key store");
+        }
+        info!("Imported {} keys", count);
+    }
+
     let key_store = Arc::new(Mutex::new(key_store));
     let key_store_ref = Arc::downgrade(&key_store);
 

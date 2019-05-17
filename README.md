@@ -23,10 +23,10 @@ cargo run -- [options]
 Or with authorisation enabled (using AWS V4 header-based signatures):
 
 ```bash
-cargo run --features authorisation -- --access-tokens [path to token list] [options]
+cargo run --features authorisation -- --access-tokens [token list path] [options]
 ```
 
-…where the token list is a JSON file with a list of access tokens. See `./examples/auth.json`.
+…where the token list is a JSON file with a list of access tokens. See `./examples/access-tokens.json`.
 
 Note that without the authorisation feature, all keys are handled with a single account ID and region.
 
@@ -35,13 +35,22 @@ If you need key persistence, they can be kept in a password protected key store:
 
 ```bash
 # replace [options] above with
---data [key store path] [options]
+--data [key store directory] [options]
 ```
+
+When the server is started, keys can automatically be imported into the key store:
+
+```bash
+# replace [options] above with
+--import-keys [key list path] [options]
+```
+
+…where the key list is a JSON file with a list of keys. See `./examples/keys.json`.
 
 You can inspect key store contents with:
 
 ```bash
-cargo run --example browser -- --data [key store path] [options]
+cargo run --example browser -- --data [key store directory] [options]
 ```
 
 The server can also run in a Docker container (currently without AWS V4 header-based signatures enabled):
@@ -53,7 +62,7 @@ docker run -it --rm --publish 6767:6767 --name rusty-kms \
     rusty-kms [options]
 # or with persistence:
 docker run -it --rm --publish 6767:6767 --name rusty-kms \
-    --mount type=bind,source=[local path],target=/var/run/rusty_kms \
+    --mount type=bind,source=[local directory],target=/var/run/rusty_kms \
     rusty-kms 0.0.0.0:6767 --data /var/run/rusty_kms
 ```
 
@@ -93,7 +102,6 @@ To-do
 -----
 
 * Error responses and status codes are likely messed up with respect to AWS
-* Key seeding: allow importing like local-kms
 * Better mock authentication and accounts
 * Key policies / grants
 * Tidy module structure, visibility and maybe hide key handling internals better

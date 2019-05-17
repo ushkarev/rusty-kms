@@ -8,6 +8,7 @@ use std::ops::Index;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use base64::{decode as b64decode, encode as b64encode};
 use chrono::{DateTime, TimeZone, Utc};
 use openssl::pkey::Private;
 use openssl::rsa::{Rsa, Padding};
@@ -16,7 +17,9 @@ use ring::constant_time::verify_slices_are_equal;
 use ring::digest::{self, digest};
 use ring::pbkdf2::derive as pbkdf2_derive;
 use ring::rand::{SecureRandom, SystemRandom};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::de;
+use serde::ser::SerializeSeq;
 use time::Duration as OldDuration;
 use uuid::Uuid;
 
@@ -87,21 +90,40 @@ pub enum ImportTokenError {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyStore {
     keys: HashMap<String, Key>,  // arn => key
     aliases: HashMap<String, String>,  // alias => arn
 
     #[serde(skip_deserializing, skip_serializing)]
-    config: Option<(PathBuf, [u8; KEY_MATERIAL_LEN])>, // config path, password/key
+    config: Option<(PathBuf, KeyMaterial)>, // config path, password/key
 }
 
 impl KeyStore {
+    pub fn new<T>(data_path: Option<T>) -> KeyStore where T: AsRef<Path> {
+        data_path
+            .and_then(|data_path| {
+                let password = rpassword::read_password_from_tty(Some("Key store password: ")).unwrap_or_else(|e| {
+                    error!("Cannot read password: {}", e);
+                    std::process::exit(1);
+                });
+                KeyStore::new_with_persistance(data_path, password)
+                    .map_err(|e| {
+                        error!("Cannot create key store: {}", e);
+                        std::process::exit(1);
+                    })
+                    .ok()
+            })
+            .or_else(|| Some(KeyStore::new_without_persistance()))
+            .expect("cannot create key store")
+    }
+
     pub fn new_without_persistance() -> KeyStore {
         KeyStore { keys: HashMap::new(), aliases: HashMap::new(), config: None }
     }
 
-    pub fn new_with_persistance<T>(path: T, password: String) -> Result<Self, IoError> where T: AsRef<Path> {
-        let data_path = path.as_ref();
+    pub fn new_with_persistance<T>(data_path: T, password: String) -> Result<Self, IoError> where T: AsRef<Path> {
+        let data_path = data_path.as_ref();
         if !data_path.is_dir() {
             return Err(IoError::new(IoErrorKind::NotFound, "data path is not a dir"));
         }
@@ -215,7 +237,7 @@ impl KeyStore {
             }
             Err(_) => {
                 let key_arn = KeyArn::from_authorisation(key_id_or_arn, authorisation);
-                self.keys.get(&key_arn.arn_str)
+                self.keys.get(key_arn.arn_str())
             }
         };
         key.filter(|&key| key.is_usable())
@@ -249,7 +271,7 @@ impl KeyStore {
             }
             Err(_) => {
                 let key_arn = KeyArn::from_authorisation(key_id_or_arn, authorisation);
-                self.keys.get_mut(&key_arn.arn_str)
+                self.keys.get_mut(key_arn.arn_str())
             }
         };
         key.filter(|key| key.is_usable())
@@ -407,7 +429,10 @@ const TAG_LEN: usize = 16;  // AES_256_GCM.tag_len()
 const NONCE_LEN: usize = 12;  // AES_256_GCM.nonce_len()
 const CONTEXT_DIGEST_LEN: usize = ring::digest::SHA256_OUTPUT_LEN;
 
+type KeyMaterial = [u8; KEY_MATERIAL_LEN];
+
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Key {
     state: KeyState,
     kind: KeyKind,
@@ -415,11 +440,12 @@ pub struct Key {
     created: DateTime<Utc>,
     description: String,
     tags: HashMap<String, String>,
-    key_material: Vec<[u8; KEY_MATERIAL_LEN]>,
+    #[serde(deserialize_with = "deserialise_key_material", serialize_with = "serialise_key_material")]
+    key_material: Vec<KeyMaterial>,
 }
 
 impl Key {
-    fn make_key_material() -> [u8; KEY_MATERIAL_LEN] {
+    fn make_key_material() -> KeyMaterial {
         let mut key_material = [0u8; KEY_MATERIAL_LEN];
         SECURE_RANDOM.fill(&mut key_material).expect("unable to generate key material");
         key_material
@@ -576,7 +602,7 @@ impl Key {
         !self.key_material.is_empty()
     }
 
-    pub fn key_material(&self) -> &[[u8; KEY_MATERIAL_LEN]] {
+    pub fn key_material(&self) -> &[KeyMaterial] {
         &self.key_material
     }
 
@@ -620,7 +646,7 @@ impl Key {
         }
     }
 
-    pub fn import_key_material(&mut self, kind: KeyKind, key_material: [u8; KEY_MATERIAL_LEN]) {
+    pub fn import_key_material(&mut self, kind: KeyKind, key_material: KeyMaterial) {
         if self.is_external() {
             self.key_material = vec![key_material];
             self.kind = kind;
@@ -673,8 +699,7 @@ impl Key {
         }
         let offset = data.len() - CONTEXT_DIGEST_LEN;
         let context_digest = encryption_context_hash(context);
-        verify_slices_are_equal(&data[offset..], context_digest.as_ref())
-            .map_err(|_| ())?;
+        verify_slices_are_equal(&data[offset..], context_digest.as_ref()).or(Err(()))?;
         data.drain(offset..);
         Ok(())
     }
@@ -728,7 +753,45 @@ impl<'a> Into<KeyMetadata<'a>> for &'a Key {
     }
 }
 
-fn derive_simple_key(password: &str) -> [u8; KEY_MATERIAL_LEN] {
+fn deserialise_key_material<'de, D>(deserializer: D) -> Result<Vec<KeyMaterial>, D::Error> where D: Deserializer<'de> {
+    struct V;
+
+    impl<'de> de::Visitor<'de> for V {
+        type Value = Vec<KeyMaterial>;
+
+        fn expecting(&self, formatter: &mut Formatter) -> FormatResult {
+            formatter.write_str("seq expected")
+        }
+
+        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error> where A: de::SeqAccess<'de> {
+            let seq: Vec<String> = Deserialize::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+            let mut v: Self::Value = Vec::with_capacity(seq.len());
+            for item in seq.iter() {
+                let item = b64decode(item).map_err(de::Error::custom)?;
+                if item.len() != KEY_MATERIAL_LEN {
+                    let msg = format!("sequence of {} bytes", KEY_MATERIAL_LEN);
+                    return Err(de::Error::invalid_length(item.len(), &msg.as_str()));
+                }
+                let mut key = [0u8; KEY_MATERIAL_LEN];
+                key.copy_from_slice(&item);
+                v.push(key);
+            }
+            Ok(v)
+        }
+    }
+
+    deserializer.deserialize_seq(V)
+}
+
+fn serialise_key_material<S>(key_material: &[KeyMaterial], serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+    let mut seq = serializer.serialize_seq(Some(key_material.len()))?;
+    for key in key_material.iter().map(b64encode) {
+        seq.serialize_element(&key)?;
+    }
+    seq.end()
+}
+
+fn derive_simple_key(password: &str) -> KeyMaterial {
     // NB: SHA256_OUTPUT_LEN = AES_256_GCM.key_len()
     static SALT: &[u8; 16] = b"\xd3\xc1\xfa\xc8\x80OFw\xb5x\xd9\xe8#ng\x05";
     let mut key = [0u8; KEY_MATERIAL_LEN];
@@ -736,7 +799,7 @@ fn derive_simple_key(password: &str) -> [u8; KEY_MATERIAL_LEN] {
     key
 }
 
-fn encrypt(data: &mut Vec<u8>, key: &[u8; KEY_MATERIAL_LEN]) {
+fn encrypt(data: &mut Vec<u8>, key: &KeyMaterial) {
     static TAG_SPACE: [u8; TAG_LEN] = [0u8; TAG_LEN];
     data.extend_from_slice(&TAG_SPACE);
     let mut nonce = [0u8; NONCE_LEN];
@@ -747,7 +810,7 @@ fn encrypt(data: &mut Vec<u8>, key: &[u8; KEY_MATERIAL_LEN]) {
     data.extend_from_slice(&nonce);
 }
 
-fn decrypt(data: &mut Vec<u8>, key: &[u8; KEY_MATERIAL_LEN]) -> Result<(), ()> {
+fn decrypt(data: &mut Vec<u8>, key: &KeyMaterial) -> Result<(), ()> {
     let nonce_offset = data.len() - AES_256_GCM.nonce_len();
     let (cipher_text, nonce) = data.split_at_mut(nonce_offset);
     let nonce = Nonce::try_assume_unique_for_key(nonce).expect("cannot read nonce");
@@ -854,6 +917,7 @@ pub trait Arn: FromStr {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct KeyArn {
     region: String,
     account_id: String,
@@ -995,6 +1059,24 @@ impl FromStr for AliasArn {
     }
 }
 
+pub fn load_keys_from<T>(path: T) -> Result<Vec<Key>, IoError> where T: AsRef<Path> {
+    let path = path.as_ref();
+    if !path.is_file() {
+        return Err(IoError::new(IoErrorKind::NotFound, "key path is not a file"));
+    }
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    Ok(serde_json::from_reader(reader)?)
+}
+
+pub fn persist_keys_to<T>(access_tokens: &[Key], path: T) -> Result<(), IoError> where T: AsRef<Path> {
+    let path = path.as_ref();
+    let file = File::create(path)?;
+    let writer = BufWriter::new(file);
+    serde_json::to_writer(writer, access_tokens)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use rand::Rng;
@@ -1022,9 +1104,9 @@ mod tests {
             let mut data = input.to_vec();
             key.encrypt_data(&mut data, None).expect("cannot encrypt");
             assert_ne!(&data, &input);
-            let (arn, key_nmaterial_generation) = Key::unwrap_encrypted_data(&mut data).expect("cannot unwrap");
+            let (arn, key_material_generation) = Key::unwrap_encrypted_data(&mut data).expect("cannot unwrap");
             assert_eq!(&arn, key.arn().arn_str());
-            key.decrypt_data(&mut data, key_nmaterial_generation, None).expect("cannot decrypt");
+            key.decrypt_data(&mut data, key_material_generation, None).expect("cannot decrypt");
             assert_eq!(&data, &input);
         };
 

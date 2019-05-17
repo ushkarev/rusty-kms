@@ -1,8 +1,8 @@
 workflow "Test" {
-  on = "push"
-  resolves = "Run tests"
+    on = "push"
+    resolves = "Run tests"
 }
 
 action "Run tests" {
-  uses = "./.github/test"
+    uses = "./.github/test"
 }

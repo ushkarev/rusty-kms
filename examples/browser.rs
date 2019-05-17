@@ -4,7 +4,6 @@
 extern crate log;
 
 use std::cell::RefCell;
-use std::path::Path;
 use std::rc::Rc;
 
 use base64::encode as b64encode;
@@ -36,22 +35,7 @@ fn main() {
         warn!("Key material will be revealed");
     }
 
-    let key_store = args.value_of("data_path")
-        .and_then(|path| {
-            let password = rpassword::read_password_from_tty(Some("Key store password: ")).unwrap_or_else(|e| {
-                error!("Cannot read password {}", e);
-                std::process::exit(1);
-            });
-            let path = Path::new(path);
-            KeyStore::new_with_persistance(path, password)
-                .map_err(|e| {
-                    error!("Cannot create key store: {}", e);
-                    std::process::exit(1);
-                })
-                .ok()
-        })
-        .or_else(|| Some(KeyStore::new_without_persistance()))
-        .expect("Cannot create key store");
+    let key_store = KeyStore::new(args.value_of("data_path"));
     let key_store_details = KeyStoreDetails { show_key_material, key_store };
     show_browser(key_store_details);
 }
@@ -71,16 +55,28 @@ fn show_browser(key_store_details: KeyStoreDetails) {
     siv.set_theme(theme);
 
     let key_store_details = Rc::new(RefCell::new(key_store_details));
+
     let key_store_details_clone = Rc::clone(&key_store_details);
+    let delete_lock = Rc::new(RefCell::new(false));
     siv.add_global_callback(KeyEvent::Backspace, move |s: &mut Cursive| {
+        if *delete_lock.borrow() {
+            return;
+        }
         if let Some(arn) = s.find_id::<SelectView>("list")
             .map(|view| view.selection())
             .unwrap_or(None) {
             if arn.is_empty() {
                 return;
             }
+            *delete_lock.borrow_mut() = true;
+            let delete_lock1 = Rc::clone(&delete_lock);
+            let delete_lock2 = Rc::clone(&delete_lock);
             let key_store_details = Rc::clone(&key_store_details_clone);
             let prompt = Dialog::text("Do you want to delete this key?")
+                .button("Cancel", move |s: &mut Cursive| {
+                    s.pop_layer();
+                    *delete_lock1.borrow_mut() = false;
+                })
                 .button("Delete", move |s: &mut Cursive| {
                     let mut key_store_details = key_store_details.borrow_mut();
                     key_store_details.delete_key(&arn);
@@ -92,8 +88,8 @@ fn show_browser(key_store_details: KeyStoreDetails) {
                         text_view.set_content("Select a key")
                     }).unwrap();
                     s.pop_layer();
-                })
-                .dismiss_button("Cancel");
+                    *delete_lock2.borrow_mut() = false;
+                });
             s.add_layer(prompt);
         }
     });
@@ -208,11 +204,11 @@ impl KeyStoreDetails {
             output.append_plain("\n");
         }
         if self.show_key_material && key.has_key_material() {
-            output.append_styled("\nKey material:\n", label_colour);
+            output.append_styled("\n\nKey material:", label_colour);
             for item in key.key_material().iter().map(b64encode) {
+                output.append_plain("\n    ");
                 output.append_plain(item.as_str())
             }
-            output.append_plain("\n");
         }
         text_view.set_content(output);
     }

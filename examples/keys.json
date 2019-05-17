@@ -1,0 +1,18 @@
+[
+    {
+        "description": "Sample key",
+        "created": "2019-05-20T12:00:00Z",
+        "state": "Enabled",
+        "kind": "Internal",
+        "arn": {
+            "region": "eu-west-2",
+            "account_id": "0000000",
+            "key_id": "11111111-2222-3333-4444-555555555555",
+            "arn_str": "arn:aws:kms:eu-west-2:0000000:key/11111111-2222-3333-4444-555555555555"
+        },
+        "tags": {},
+        "key_material": [
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDE="
+        ]
+    }
+]

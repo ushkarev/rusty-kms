@@ -69,7 +69,7 @@ impl<A> KMSRequest<A> where A: Authorisation {
                 .and_then(|(authorisation, body)| {
                     authorisation.authorise_body(body.as_str())
                         .map(|_| {
-                            debug!("Authorised as {}", authorisation.account_id());
+                            debug!("Authorised with account {} in region {}", authorisation.account_id(), authorisation.region());
                             KMSAuthorisedRequest::Authorised { authorisation, body }
                         })
                         .or(Ok(KMSAuthorisedRequest::Unauthorised))

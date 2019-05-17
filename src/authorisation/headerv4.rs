@@ -323,7 +323,6 @@ impl Authorisation for HeaderV4Authorisation {
         let expected_signature = hex_bytes(expected_signature.as_ref());
 
         verify_slices_are_equal(expected_signature.as_bytes(), self.signature.as_bytes())
-            .map(|_| ())
             .map_err(|_| {
                 debug!("Expected signature {} does not match provided {}", expected_signature, self.signature);
                 AuthorisationError::InvalidSignature

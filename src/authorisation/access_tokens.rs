@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccessToken {
     account_id: String,
     access_key: String,
@@ -51,10 +52,10 @@ pub fn load_access_tokens_from<T>(path: T) -> Result<Vec<AccessToken>, IoError> 
     Ok(serde_json::from_reader(reader)?)
 }
 
-pub fn persist_access_tokens_to<T>(access_tokens: Vec<AccessToken>, path: T) -> Result<(), IoError> where T: AsRef<Path> {
+pub fn persist_access_tokens_to<T>(access_tokens: &[AccessToken], path: T) -> Result<(), IoError> where T: AsRef<Path> {
     let path = path.as_ref();
     let file = File::create(path)?;
     let writer = BufWriter::new(file);
-    serde_json::to_writer(writer, &access_tokens)?;
+    serde_json::to_writer(writer, access_tokens)?;
     Ok(())
 }
