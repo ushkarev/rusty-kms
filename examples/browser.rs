@@ -186,10 +186,10 @@ impl KeyStoreDetails {
         }
         output.append_plain(description);
         output.append_plain("\n");
-        let aliases = self.key_store.aliases_for(key.arn().arn_str());
+        let aliases = key.aliases();
         if !aliases.is_empty() {
             output.append_styled("Aliases:", label_colour);
-            for item in aliases {
+            for item in aliases.iter() {
                 output.append_plain("\n    ");
                 output.append_plain(item.as_str())
             }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::{Iter as HashMapIter, Values as HashMapValues};
 use std::fmt::{Display, Debug, Formatter, Result as FormatResult};
 use std::fs::File;
@@ -93,6 +93,8 @@ pub enum ImportTokenError {
 #[serde(deny_unknown_fields)]
 pub struct KeyStore {
     keys: HashMap<String, Key>,  // arn => key
+
+    #[serde(skip_deserializing, skip_serializing)]
     aliases: HashMap<String, String>,  // alias => arn
 
     #[serde(skip_deserializing, skip_serializing)]
@@ -159,9 +161,23 @@ impl KeyStore {
             .map(|mut key_store: KeyStore| {
                 info!("Loaded key store with {} keys", key_store.keys.len());
                 key_store.cleanup();
+                key_store.update_aliases();
                 key_store.config = Some((config_path, password));
                 key_store
             })
+    }
+
+    fn update_aliases(&mut self) {
+        self.aliases = self.keys.iter()
+            .filter(|&(_, key)| !key.aliases.is_empty())
+            .map(|(arn, key)| {
+                let aliases: Vec<(String, String)> = key.aliases.iter()
+                    .map(|alias| (alias.to_owned(), arn.to_owned()))
+                    .collect();
+                aliases
+            })
+            .flatten()
+            .collect();
     }
 
     pub fn cleanup(&mut self) {
@@ -286,13 +302,10 @@ impl KeyStore {
     }
 
     pub fn delete_key(&mut self, arn: &str) {
-        self.keys.remove(arn);
-        let aliases: Vec<String> = self.aliases.iter()
-            .filter(|&(_, another_arn)| another_arn == arn)
-            .map(|(alias, _)| alias.to_owned())
-            .collect();
-        for alias in aliases {
-            self.aliases.remove(&alias);
+        if let Some(key) = self.keys.remove(arn) {
+            for alias in key.aliases.iter() {
+                self.aliases.remove(alias);
+            }
         }
     }
 
@@ -301,24 +314,24 @@ impl KeyStore {
     }
 
     pub fn delete_alias<A>(&mut self, alias: &str, authorisation: &A) -> Result<(), ()> where A: Authorisation {
-        match self.get_alias(alias, authorisation) {
-            Some(_) => {
+        self.get_alias(alias, authorisation)
+            .map(|key_arn| key_arn.to_owned())
+            .map(|key_arn| {
+                self.keys.get_mut(&key_arn).expect("dangling alias").aliases.remove(alias);
                 self.aliases.remove(alias);
-                Ok(())
-            },
-            None => Err(()),
-        }
+            })
+            .ok_or(())
     }
 
-    pub fn save_alias<A>(&mut self, alias: String, key_arn: String, _authorisation: &A) where A: Authorisation {
-        self.aliases.insert(alias, key_arn);
-    }
-
-    pub fn aliases_for(&self, key_arn: &str) -> Vec<String> {
-        self.aliases.iter()
-            .filter(|&(_, a_key_arn)| a_key_arn == key_arn)
-            .map(|(alias, _)| String::from(alias.as_str()))
-            .collect()
+    pub fn save_alias<A>(&mut self, alias: String, key_arn: String, authorisation: &A) -> Result<(), ()> where A: Authorisation {
+        self.lookup_mut(&key_arn, authorisation)
+            .map(|key| {
+                key.aliases_mut().insert(alias.to_owned());
+            })
+            .map(|_| {
+                self.aliases.insert(alias, key_arn);
+            })
+            .ok_or(())
     }
 
     pub fn alias_iter(&self) -> HashMapIter<String, String> {
@@ -440,6 +453,7 @@ pub struct Key {
     created: DateTime<Utc>,
     description: String,
     tags: HashMap<String, String>,
+    aliases: HashSet<String>,
     #[serde(deserialize_with = "deserialise_key_material", serialize_with = "serialise_key_material")]
     key_material: Vec<KeyMaterial>,
 }
@@ -451,7 +465,7 @@ impl Key {
         key_material
     }
 
-    pub fn new<A>(authorisation: &A, kind: KeyKind, description: String, tags: HashMap<String, String>) -> Key where A: Authorisation {
+    pub fn new<A>(authorisation: &A, kind: KeyKind, description: String, aliases: HashSet<String>, tags: HashMap<String, String>) -> Key where A: Authorisation {
         let key_id = Uuid::new_v4().to_string();
         let (state, key_material) = if kind == KeyKind::Internal {
             (KeyState::Enabled, vec![Key::make_key_material()])
@@ -464,6 +478,7 @@ impl Key {
             arn: KeyArn::from_authorisation(&key_id, authorisation),
             created: Utc::now(),
             description,
+            aliases,
             tags,
             key_material,
         }
@@ -507,6 +522,14 @@ impl Key {
 
     pub fn created(&self) -> &DateTime<Utc> {
         &self.created
+    }
+
+    pub fn aliases(&self) -> &HashSet<String> {
+        &self.aliases
+    }
+
+    pub fn aliases_mut(&mut self) -> &mut HashSet<String> {
+        &mut self.aliases
     }
 
     pub fn tags(&self) -> &HashMap<String, String> {
@@ -1099,7 +1122,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         let authorisation = OpenAuthorisation::new("0000000", "eu-west-2");
-        let key = Key::new(&authorisation, KeyKind::Internal, String::new(), HashMap::new());
+        let key = Key::new(&authorisation, KeyKind::Internal, String::new(), HashSet::new(), HashMap::new());
         let check = |input: &[u8]| {
             let mut data = input.to_vec();
             key.encrypt_data(&mut data, None).expect("cannot encrypt");
@@ -1127,7 +1150,7 @@ mod tests {
     fn keystore() {
         let mut key_store = KeyStore::new_without_persistance();
         let authorisation = OpenAuthorisation::new("0000000", "eu-west-2");
-        let key = Key::new(&authorisation, KeyKind::Internal, String::new(), HashMap::new());
+        let key = Key::new(&authorisation, KeyKind::Internal, String::new(), HashSet::new(), HashMap::new());
         let key_arn = key.arn().arn_str().to_owned();
         let key_id = key.key_id().to_owned();
         key_store.save(key).expect("cannot save key");

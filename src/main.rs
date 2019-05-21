@@ -3,7 +3,7 @@
 #[macro_use]
 extern crate log;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Error as IoError;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -337,6 +337,7 @@ impl<AP> KMSService<AP> where AP: AuthorisationProvider {
                         &authorisation,
                         kind,
                         request.Description.unwrap_or_default().to_owned(),
+                        HashSet::new(),
                         tags,
                     );
                     let output = CreateKeyResponse {
@@ -1557,7 +1558,13 @@ impl<AP> KMSService<AP> where AP: AuthorisationProvider {
                         );
                     }
                     let key_arn = key.arn().arn_str().to_owned();
-                    key_store.save_alias(alias.to_owned(), key_arn, &authorisation);
+                    if key_store.save_alias(alias.to_owned(), key_arn, &authorisation).is_err() {
+                        return response.send_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "KMSInternalException",
+                            "Could not save alias",
+                        );
+                    }
                     drop(key_store);
 
                     response.send("")
@@ -1771,7 +1778,13 @@ impl<AP> KMSService<AP> where AP: AuthorisationProvider {
                             "AliasName not found",
                         );
                     }
-                    key_store.save_alias(alias.to_owned(), key_arn, &authorisation);
+                    if key_store.save_alias(alias.to_owned(), key_arn, &authorisation).is_err() {
+                        return response.send_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "KMSInternalException",
+                            "Could not save alias",
+                        );
+                    }
                     drop(key_store);
 
                     response.send("")
