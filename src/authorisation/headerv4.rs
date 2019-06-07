@@ -11,10 +11,10 @@ use ring::digest::{self, digest};
 use ring::hmac;
 use time::Duration as OldDuration;
 
-use crate::authorisation::{AuthorisationProvider, Authorisation, AuthorisationError};
+use crate::authorisation::{AuthorisationProvider, Authorisation, AuthorisationError, Access};
 use crate::authorisation::access_tokens::AccessToken;
-use crate::request::KMSRequest;
-use crate::key_store::{Arn, Key};
+use crate::key_store::Key;
+use crate::requests::KMSRequest;
 
 
 #[derive(Debug)]
@@ -239,16 +239,6 @@ fn normalise_header(header: &str) -> Cow<str> {
     RE_WHITESPACE.replace_all(header, " ")
 }
 
-fn hex_bytes(data: &[u8]) -> String {
-    // TODO: if values are always fixed length, might be more efficient to use a macro
-    data.iter()
-        .map(|byte| format!("{:02x}", byte))
-        .fold(String::new(), |mut payload, s| {
-            payload.push_str(s.as_str());
-            payload
-        })
-}
-
 fn hmac_sign(key_bytes: &[u8], data: &[u8]) -> hmac::Signature {
     let key = hmac::SigningKey::new(&digest::SHA256, key_bytes);
     hmac::sign(&key, data)
@@ -289,8 +279,8 @@ impl Iterator for DateIterator {
 #[derive(Debug)]
 pub struct HeaderV4Authorisation {
     token: String,
-    account_id: String,
     region: String,
+    account_id: String,
 
     signature: String,
     partial_canonical_request: RefCell<String>,
@@ -300,13 +290,13 @@ pub struct HeaderV4Authorisation {
 
 impl Authorisation for HeaderV4Authorisation {
     #[inline]
-    fn account_id(&self) -> &str {
-        &self.account_id
+    fn region(&self) -> &str {
+        &self.region
     }
 
     #[inline]
-    fn region(&self) -> &str {
-        &self.region
+    fn account_id(&self) -> &str {
+        &self.account_id
     }
 
     fn authorise_body(&self, body: &str) -> Result<(), AuthorisationError> {
@@ -314,13 +304,13 @@ impl Authorisation for HeaderV4Authorisation {
         let mut str_to_sign = self.partial_str_to_sign.replace(String::default());
 
         let body_digest = digest(&digest::SHA256, body.as_bytes());
-        let body_digest = hex_bytes(body_digest.as_ref());
+        let body_digest = hex::encode(body_digest.as_ref());
         canonical_request.push_str(body_digest.as_str());
         let canonical_signature = digest(&digest::SHA256, canonical_request.as_bytes());
-        let canonical_signature = hex_bytes(canonical_signature.as_ref());
+        let canonical_signature = hex::encode(canonical_signature.as_ref());
         str_to_sign.push_str(canonical_signature.as_str());
         let expected_signature = hmac_sign(self.partial_signature.as_ref(), str_to_sign.as_bytes());
-        let expected_signature = hex_bytes(expected_signature.as_ref());
+        let expected_signature = hex::encode(expected_signature.as_ref());
 
         verify_slices_are_equal(expected_signature.as_bytes(), self.signature.as_bytes())
             .map_err(|_| {
@@ -329,8 +319,8 @@ impl Authorisation for HeaderV4Authorisation {
             })
     }
 
-    fn authorises_access(&self, key: &Key) -> Result<(), AuthorisationError> {
-        if key.arn().region() == self.region() && key.arn().account_id() == self.account_id() {
+    fn authorises_access(&self, key: &Key, _access: Access) -> Result<(), AuthorisationError> {
+        if key.region() == self.region() && key.account_id() == self.account_id() {
             Ok(())
         } else {
             debug!("Authorisation region or account ID does not match key");
@@ -339,9 +329,11 @@ impl Authorisation for HeaderV4Authorisation {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use chrono::TimeZone;
     use http::Request;
     use hyper::body::Body;
@@ -351,11 +343,7 @@ mod tests {
     fn try_authorise(mut request: KMSRequest<HeaderV4Authorisation>) -> (KMSRequest<HeaderV4Authorisation>, Result<(), AuthorisationError>, Option<Result<(), AuthorisationError>>) {
         env_logger::try_init().unwrap_or(());
         let provider = HeaderV4AuthorisationProvider::new(vec![
-            AccessToken::new(
-                String::from("0000000"),
-                String::from("AAAAAAAAAAAAAAAAAAAAA"),
-                String::from("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"),
-            ),
+            AccessToken::new("0000000", "AAAAAAAAAAAAAAAAAAAAA", "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"),
         ]);
         let parse_result = provider.authorise(&mut request);
         let signature_result = match request.authorisation_mut() {
@@ -385,8 +373,8 @@ mod tests {
         assert!(signature_result.unwrap().is_ok());
         assert!(request.authorisation_mut().is_some());
         if let Some(authorisation) = request.authorisation_mut() {
-            assert_eq!(authorisation.account_id(), "0000000");
             assert_eq!(authorisation.region(), "eu-west-2");
+            assert_eq!(authorisation.account_id(), "0000000");
         }
     }
 

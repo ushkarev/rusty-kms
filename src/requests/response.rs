@@ -3,7 +3,7 @@ use http::response::Builder;
 use hyper::{Response, StatusCode, Body};
 use uuid::Uuid;
 
-use super::error::KMSError;
+use crate::requests::KMSError;
 
 pub struct KMSResponse {
     uuid: Uuid,
@@ -15,7 +15,7 @@ impl KMSResponse {
     pub fn new(uuid: Uuid) -> KMSResponse {
         let mut builder = Response::builder();
         builder
-            .header(hyper::header::SERVER, "Rusty KMS")
+            .header(hyper::header::SERVER, format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
             .header(hyper::header::CONTENT_TYPE, "application/x-amz-json-1.1")
             .header("x-amzn-RequestId", uuid.to_string());
         KMSResponse { builder, uuid, action: None }

@@ -1,19 +1,25 @@
-[
-    {
-        "description": "Sample key",
-        "created": "2019-05-20T12:00:00Z",
-        "state": "Enabled",
-        "kind": "Internal",
-        "arn": {
+{
+    "keys": [
+        {
+            "key_id": "11111111-2222-3333-4444-555555555555",
             "region": "eu-west-2",
             "account_id": "0000000",
-            "key_id": "11111111-2222-3333-4444-555555555555",
-            "arn_str": "arn:aws:kms:eu-west-2:0000000:key/11111111-2222-3333-4444-555555555555"
-        },
-        "tags": {},
-        "aliases": ["alias/sample"],
-        "key_material": [
-            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDE="
-        ]
-    }
-]
+            "created": "2019-05-20T12:00:00Z",
+            "description": "Sample key",
+            "state": "Enabled",
+            "kind": "Internal",
+            "tags": [
+                {"key": "Name", "value": "lol"}
+            ],
+            "key_materials": [
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDE="
+            ]
+        }
+    ],
+    "aliases": [
+        {
+            "name": "alias/sample",
+            "key_id": "11111111-2222-3333-4444-555555555555"
+        }
+    ]
+}

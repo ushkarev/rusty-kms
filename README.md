@@ -42,15 +42,15 @@ When the server is started, keys can automatically be imported into the key stor
 
 ```bash
 # replace [options] above with
---import-keys [key list path] [options]
+--import [key list path] [options]
 ```
 
-…where the key list is a JSON file with a list of keys. See `./examples/keys.json`.
+…where the key list is a JSON file with a list of keys and aliases. See `./examples/keys.json`.
 
 You can inspect key store contents with:
 
 ```bash
-cargo run --example browser -- --data [key store directory] [options]
+cargo run --example browser -- [key store directory] [options]
 ```
 
 The server can also run in a Docker container (currently without AWS V4 header-based signatures enabled):
@@ -79,15 +79,15 @@ cargo run --example demo -- [options]
 With AWS CLI tools:
 
 ```bash
+pip install -r examples/demo-requirements.txt 
 aws --endpoint-url http://127.0.0.1:6767/ kms list-keys
 ```
 
 With python boto3 library:
 
-```python
-import boto3
-client = boto3.client('kms', endpoint_url='http://127.0.0.1:6767/')
-print(client.list_keys()['Keys'])
+```bash
+pip install -r examples/demo-requirements.txt 
+python examples/demo.py
 ```
 
 Test
@@ -95,19 +95,28 @@ Test
 
 ```bash
 cargo test --all-features -- --nocapture
+cargo bench --all-features -- --nocapture
 cargo clippy --all-features
 ```
 
 To-do
 -----
 
-* Error responses and status codes are likely messed up with respect to AWS
+* Check requests:
+    * Key lookup by id does not allow cross-account usage
+    * Which actions allow aliases
+    * Action vs key state
+    * Tagging: can remove non-existant tag?
+* Error responses and status codes often do not match AWS responses
 * Better mock authentication and accounts
 * Key policies / grants
-* Tidy module structure, visibility and maybe hide key handling internals better
+* Mock custom key stores
+* Improve module structure so that server can only access key and store methods with authorisation
+* Maybe use more resilient pagination using mutation flag in marker
 * Maybe use toml or yaml as serialisation format
 * Server methods are very repetitive, but cannot factor out deserialisation because values are borrowed..?
-    * Make data type own contents?
+    * Make data type own contents or use Cows?
     * Will async/await constructs help once part of the language?
 * Test coverage is very low
+    * Test integrity checks
 * Use `rusoto` types and/or credential loading?

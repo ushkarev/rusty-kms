@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # Usage:
-# . [path to python virtual environment with awscli installed]/bin/activate
-# AWS_ACCESS_KEY_ID=AAAAAAAAAAAAAAAAAAAAA AWS_SECRET_ACCESS_KEY=ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ ./examples/demo.sh
+# pip install -r examples/demo-requirements.txt
+# AWS_ACCESS_KEY_ID=AAAAAAAAAAAAAAAAAAAAA AWS_SECRET_ACCESS_KEY=ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ AWS_DEFAULT_REGION=eu-west-2 examples/demo.sh
 
 set -e
 

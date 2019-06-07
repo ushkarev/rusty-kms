@@ -4,8 +4,8 @@ use hyper::{Request, Uri, Method, Body, Error as HyperError};
 use hyper::header::{HeaderMap, AsHeaderName, HeaderValue};
 use uuid::Uuid;
 
-use super::error::KMSError;
-use super::authorisation::Authorisation;
+use crate::authorisation::Authorisation;
+use crate::requests::KMSError;
 
 pub struct KMSRequest<A> where A: Authorisation {
     request: Request<Body>,
@@ -49,31 +49,29 @@ impl<A> KMSRequest<A> where A: Authorisation {
         &mut self.authorisation
     }
 
-    pub fn body_loaded(self) -> Box<Future<Item=KMSAuthorisedRequest<A>, Error=KMSError> + Send> {
+    pub fn body_loaded(self) -> impl Future<Item=KMSAuthorisedRequest<A>, Error=KMSError> + Send {
         let authorisation = self.authorisation.expect("cannot load body without authorisation");
         let body = self.request.into_body();
-        Box::new(
-            body
-                .fold(Vec::new(), |mut body, chunk| {
-                    body.extend_from_slice(&*chunk);
-                    future::ok::<_, HyperError>(body)
-                })
-                .and_then(|body| {
-                    let body = String::from_utf8(body).or_else::<String, _>(|e| {
-                        warn!("Cannot read UTF8 body: {}", e);
-                        Ok(String::new())
-                    }).unwrap();
-                    future::ok((authorisation, body))
-                })
-                .map_err(From::from)
-                .and_then(|(authorisation, body)| {
-                    authorisation.authorise_body(body.as_str())
-                        .map(|_| {
-                            debug!("Authorised with account {} in region {}", authorisation.account_id(), authorisation.region());
-                            KMSAuthorisedRequest::Authorised { authorisation, body }
-                        })
-                        .or(Ok(KMSAuthorisedRequest::Unauthorised))
-                })
-        )
+        body
+            .fold(Vec::new(), |mut body, chunk| {
+                body.extend_from_slice(chunk.as_ref());
+                future::ok::<_, HyperError>(body)
+            })
+            .and_then(|body| {
+                let body = String::from_utf8(body).or_else::<String, _>(|e| {
+                    warn!("Cannot read UTF8 body: {}", e);
+                    Ok(String::new())
+                }).unwrap();
+                future::ok((authorisation, body))
+            })
+            .map_err(From::from)
+            .and_then(|(authorisation, body)| {
+                authorisation.authorise_body(body.as_str())
+                    .map(|_| {
+                        debug!("Authorised with account {} in region {}", authorisation.account_id(), authorisation.region());
+                        KMSAuthorisedRequest::Authorised { authorisation, body }
+                    })
+                    .or(Ok(KMSAuthorisedRequest::Unauthorised))
+            })
     }
 }

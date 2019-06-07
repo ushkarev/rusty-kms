@@ -1,0 +1,4 @@
+# requirements
+awscli
+boto3
+cryptography

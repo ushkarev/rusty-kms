@@ -56,7 +56,7 @@ struct Demo {
     step: Step,
 }
 
-type DemoFuture = Box<Future<Item=Demo, Error=Error> + Send>;
+type DemoFuture = Box<dyn Future<Item=Demo, Error=Error> + Send>;
 
 impl Demo {
     fn make_request<T>(&self, action: &str, body: T) -> Request<Body> where T: Into<Body> {
@@ -66,6 +66,10 @@ impl Demo {
         *request.method_mut() = Method::POST;
         *request.uri_mut() = self.endpoint.clone();
         let headers = request.headers_mut();
+        headers.insert(
+            hyper::header::USER_AGENT,
+            HeaderValue::from_str(&format!("{}-demo/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))).unwrap(),
+        );
         headers.insert(
             hyper::header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-amz-json-1.1"),
@@ -102,27 +106,27 @@ impl Demo {
                 .map(|body| {
                     let body: Value = serde_json::from_slice(body.as_ref()).unwrap();
                     debug!("Response: {:?}", body);
-                    let arn = body
+                    let key_arn = body
                         .as_object().unwrap()
                         .get("KeyMetadata").expect("cannot read response")
                         .as_object().unwrap()
                         .get("Arn").unwrap()
                         .as_str().unwrap()
                         .to_owned();
-                    info!("Created key `{}`", arn);
-                    self.step = Step::CreatedKey(arn);
+                    info!("Created key `{}`", key_arn);
+                    self.step = Step::CreatedKey(key_arn);
                     self
                 })
         )
     }
 
     fn generate_data_key(mut self) -> DemoFuture {
-        let arn = if let Step::CreatedKey(arn) = &self.step {
-            arn
+        let key_arn = if let Step::CreatedKey(key_arn) = &self.step {
+            key_arn
         } else {
             unreachable!("step taken out of order");
         };
-        let request = format!(r#"{{"KeyId": "{}", "KeySpec": "AES_256", "EncryptionContext": {{"a": "123", "b": "abc"}}}}"#, arn);
+        let request = format!(r#"{{"KeyId": "{}", "KeySpec": "AES_256", "EncryptionContext": {{"a": "123", "b": "abc"}}}}"#, key_arn);
         let request = self.make_request("GenerateDataKeyWithoutPlaintext", request);
         Box::new(
             self.client

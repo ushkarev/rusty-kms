@@ -1,27 +1,14 @@
 #![allow(non_snake_case)]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use hyper::Body;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-macro_rules! response_traits {
-    ( $( $t:ty ),* ) => {
-        $(
-            impl<'a> ToString for $t {
-                fn to_string(&self) -> String {
-                    serde_json::to_string(self).expect("cannot convert to JSON")
-                }
-            }
-
-            impl<'a> Into<Body> for $t {
-                fn into(self) -> Body {
-                    self.to_string().into()
-                }
-            }
-        )*
-    };
-}
+use rusty_kms::misc::datetime_to_timestamp;
+use rusty_kms::key_store::Key;
 
 #[derive(Deserialize, Debug)]
 pub struct GenerateRandomRequest<'a> {
@@ -42,11 +29,11 @@ pub struct CreateKeyRequest<'a> {
     pub KeyUsage: Option<&'a str>,
     pub Origin: Option<&'a str>,
     pub Policy: Option<&'a str>,
-    pub Tags: Option<Vec<Tag<'a>>>,
+    pub Tags: Option<Vec<TagObj<'a>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Tag<'a> {
+pub struct TagObj<'a> {
     pub TagKey: &'a str,
     pub TagValue: &'a str,
 }
@@ -65,7 +52,7 @@ pub struct GetParametersForImportRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct GetParametersForImportResponse<'a> {
-    pub KeyId: &'a str,
+    pub KeyId: &'a str,  // NB: AWS returns ARN not key id
     pub ImportToken: &'a str,
     pub PublicKey: &'a str,
     pub ParametersValidTo: f64,
@@ -105,7 +92,7 @@ pub struct DescribeKeyResponse<'a> {
 #[derive(Serialize, Debug)]
 pub struct KeyMetadata<'a> {
     pub AWSAccountId: &'a str,
-    pub Arn: &'a str,
+    pub Arn: Cow<'a, str>,
     pub CreationDate: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub DeletionDate: Option<f64>,
@@ -113,7 +100,7 @@ pub struct KeyMetadata<'a> {
     pub Enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ExpirationModel: Option<&'a str>,
-    pub KeyId: &'a str,
+    pub KeyId: &'a Uuid,
     pub KeyManager: &'a str,
     pub KeyState: &'a str,
     pub KeyUsage: &'a str,
@@ -133,13 +120,13 @@ pub struct ListKeysResponse<'a> {
     pub Keys: Vec<KeyID<'a>>,
     pub Truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub NextMarker: Option<&'a str>,
+    pub NextMarker: Option<Cow<'a, str>>,
 }
 
 #[derive(Serialize, Debug)]
 pub struct KeyID<'a> {
-    pub KeyId: &'a str,
-    pub KeyArn: &'a str,
+    pub KeyId: &'a Uuid,
+    pub KeyArn: Cow<'a, str>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -151,16 +138,16 @@ pub struct ListTagsRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct ListTagsResponse<'a> {
-    pub Tags: Vec<Tag<'a>>,
+    pub Tags: Vec<TagObj<'a>>,
     pub Truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub NextMarker: Option<&'a str>,
+    pub NextMarker: Option<Cow<'a, str>>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct TagResourceRequest<'a> {
     pub KeyId: &'a str,
-    pub Tags: Vec<Tag<'a>>,
+    pub Tags: Vec<TagObj<'a>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -179,7 +166,7 @@ pub struct EncryptRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct EncryptResponse<'a> {
-    pub KeyId: &'a str,
+    pub KeyId: &'a str,  // NB: AWS returns ARN not key id
     pub CiphertextBlob: &'a str,
 }
 
@@ -192,7 +179,7 @@ pub struct DecryptRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct DecryptResponse<'a> {
-    pub KeyId: &'a str,
+    pub KeyId: &'a str,  // NB: AWS returns ARN not key id
     pub Plaintext: &'a str,
 }
 
@@ -207,8 +194,8 @@ pub struct ReEncryptRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct ReEncryptResponse<'a> {
-    pub KeyId: &'a str,
-    pub SourceKeyId: &'a str,
+    pub KeyId: &'a str,  // NB: AWS returns ARN not key id
+    pub SourceKeyId: &'a Uuid,
     pub CiphertextBlob: &'a str,
 }
 
@@ -223,14 +210,14 @@ pub struct GenerateDataKeyRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct GenerateDataKeyResponse<'a> {
-    pub KeyId: &'a str,
+    pub KeyId: &'a str,  // NB: AWS returns ARN not key id
     pub CiphertextBlob: &'a str,
     pub Plaintext: &'a str,
 }
 
 #[derive(Serialize, Debug)]
 pub struct GenerateDataKeyWithoutPlaintextResponse<'a> {
-    pub KeyId: &'a str,
+    pub KeyId: &'a str,  // NB: AWS returns ARN not key id
     pub CiphertextBlob: &'a str,
 }
 
@@ -249,14 +236,14 @@ pub struct ListAliasesRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct ListAliasesResponse<'a> {
-    pub Aliases: Vec<Alias<'a>>,
+    pub Aliases: Vec<AliasObj<'a>>,
     pub Truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub NextMarker: Option<&'a str>,
+    pub NextMarker: Option<Cow<'a, str>>,
 }
 
 #[derive(Serialize, Debug)]
-pub struct Alias<'a> {
+pub struct AliasObj<'a> {
     pub AliasArn: &'a str,
     pub AliasName: &'a str,
     pub TargetKeyId: &'a str,
@@ -286,12 +273,12 @@ pub struct EnableRequest<'a> {
 #[derive(Deserialize, Debug)]
 pub struct ScheduleKeyDeletionRequest<'a> {
     pub KeyId: &'a str,
-    pub PendingWindowInDays: Option<u8>,
+    pub PendingWindowInDays: Option<usize>,
 }
 
 #[derive(Serialize, Debug)]
 pub struct ScheduleKeyDeletionResponse<'a> {
-    pub KeyId: &'a str,
+    pub KeyId: Cow<'a, str>,  // NB: AWS returns ARN not key id
     pub DeletionDate: f64,
 }
 
@@ -302,7 +289,7 @@ pub struct CancelKeyDeletionRequest<'a> {
 
 #[derive(Serialize, Debug)]
 pub struct CancelKeyDeletionResponse<'a> {
-    pub KeyId: &'a str,
+    pub KeyId: Cow<'a, str>,  // NB: AWS returns ARN not key id
 }
 
 #[derive(Deserialize, Debug)]
@@ -325,6 +312,24 @@ pub struct DisableKeyRotationRequest<'a> {
     pub KeyId: &'a str,
 }
 
+macro_rules! response_traits {
+    ( $( $t:ty ),+ ) => {
+        $(
+            impl<'a> ToString for $t {
+                fn to_string(&self) -> String {
+                    serde_json::to_string(self).expect("cannot convert to JSON")
+                }
+            }
+
+            impl<'a> Into<Body> for $t {
+                fn into(self) -> Body {
+                    self.to_string().into()
+                }
+            }
+        )*
+    };
+}
+
 response_traits!(
     GenerateRandomResponse<'a>, CreateKeyResponse<'a>, GetParametersForImportResponse<'a>,
     DescribeKeyResponse<'a>, ListKeysResponse<'a>, ListTagsResponse<'a>,
@@ -335,11 +340,36 @@ response_traits!(
     GetKeyRotationStatusResponse
 );
 
+impl<'a, 'k> From<&'k Key> for KeyMetadata<'a> where 'k: 'a {
+    fn from(key: &'a Key) -> Self {
+        KeyMetadata {
+            AWSAccountId: key.account_id(),
+            Arn: key.arn_string().into(),
+            CreationDate: datetime_to_timestamp(key.created()),
+            DeletionDate: key.deletion_date().map(datetime_to_timestamp),
+            Description: key.description(),
+            Enabled: key.is_enabled(),
+            ExpirationModel: if key.is_external() {
+                Some(if key.expires() { "KEY_MATERIAL_EXPIRES" } else { "KEY_MATERIAL_DOES_NOT_EXPIRE" })
+            } else {
+                None
+            },
+            KeyId: key.key_id(),
+            KeyManager: "CUSTOMER",
+            KeyState: key.state().name(),
+            KeyUsage: "ENCRYPT_DECRYPT",
+            Origin: if key.is_external() { "EXTERNAL" } else { "AWS_KMS" },
+            ValidTo: key.key_material_expiry().map(datetime_to_timestamp),
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
-    use futures::{Future, Stream};
-
     use super::*;
+
+    use futures::{Future, Stream};
 
     #[test]
     fn simple_response() {

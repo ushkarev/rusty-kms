@@ -1,18 +1,18 @@
 //! Provides any request, with a set account id and region authorisation; no checks involved
 
-use crate::authorisation::{AuthorisationProvider, Authorisation, AuthorisationError};
-use crate::request::KMSRequest;
+use crate::authorisation::{AuthorisationProvider, Authorisation, AuthorisationError, Access};
 use crate::key_store::Key;
+use crate::requests::KMSRequest;
 
 #[derive(Debug)]
 pub struct OpenAuthorisationProvider {
-    account_id: String,
     region: String,
+    account_id: String,
 }
 
 impl OpenAuthorisationProvider {
-    pub fn new(account_id: String, region: String) -> OpenAuthorisationProvider {
-        OpenAuthorisationProvider { account_id, region }
+    pub fn new<R, A>(region: R, account_id: A) -> OpenAuthorisationProvider where R: Into<String>, A: Into<String> {
+        OpenAuthorisationProvider { region: region.into(), account_id: account_id.into() }
     }
 }
 
@@ -20,7 +20,7 @@ impl AuthorisationProvider for OpenAuthorisationProvider {
     type Authorisation = OpenAuthorisation;
 
     fn authorise(&self, request: &mut KMSRequest<OpenAuthorisation>) -> Result<(), AuthorisationError> {
-        *request.authorisation_mut() = Some(OpenAuthorisation::new(&self.account_id, &self.region));
+        *request.authorisation_mut() = Some(OpenAuthorisation::new(&self.region, &self.account_id));
         Ok(())
     }
 }
@@ -32,43 +32,45 @@ pub struct OpenAuthorisation {
 }
 
 impl OpenAuthorisation {
-    pub fn new(account_id: &str, region: &str) -> OpenAuthorisation {
-        OpenAuthorisation { account_id: account_id.to_owned(), region: region.to_owned() }
+    pub fn new(region: &str, account_id: &str) -> OpenAuthorisation {
+        OpenAuthorisation { region: region.to_owned(), account_id: account_id.to_owned() }
     }
 }
 
 impl Authorisation for OpenAuthorisation {
-    #[inline]
-    fn account_id(&self) -> &str {
-        &self.account_id
-    }
-
     #[inline]
     fn region(&self) -> &str {
         &self.region
     }
 
     #[inline]
+    fn account_id(&self) -> &str {
+        &self.account_id
+    }
+
+    #[inline(always)]
     fn authorise_body(&self, _body: &str) -> Result<(), AuthorisationError> {
         Ok(())
     }
 
-    #[inline]
-    fn authorises_access(&self, _key: &Key) -> Result<(), AuthorisationError> {
+    #[inline(always)]
+    fn authorises_access(&self, _key: &Key, _access: Access) -> Result<(), AuthorisationError> {
         Ok(())
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use http::Request;
     use hyper::body::Body;
 
     const BODY: &str = "{}";
 
     fn try_authorise(mut request: KMSRequest<OpenAuthorisation>) -> (KMSRequest<OpenAuthorisation>, Result<(), AuthorisationError>, Option<Result<(), AuthorisationError>>) {
-        let provider = OpenAuthorisationProvider::new(String::from("0000000"), String::from("eu-west-2"));
+        let provider = OpenAuthorisationProvider::new("eu-west-2", "0000000");
         let parse_result = provider.authorise(&mut request);
         let signature_result = match request.authorisation_mut() {
             Some(authorisation) => Some(authorisation.authorise_body(BODY)),
@@ -97,8 +99,8 @@ mod tests {
         assert!(signature_result.unwrap().is_ok());
         assert!(request.authorisation_mut().is_some());
         if let Some(authorisation) = request.authorisation_mut() {
-            assert_eq!(authorisation.account_id(), "0000000");
             assert_eq!(authorisation.region(), "eu-west-2");
+            assert_eq!(authorisation.account_id(), "0000000");
         }
     }
 }
