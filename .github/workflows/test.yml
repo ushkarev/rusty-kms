@@ -1,0 +1,16 @@
+name: Test rusty-kms
+on: push
+jobs:
+  test:
+    name: Test rusty-kms
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v1
+      - name: Run tests
+        uses: docker://rustlang/rust:nightly
+        with:
+          entrypoint: cargo
+          args: test --all-features -- --nocapture
+        env:
+          RUST_LOG: warning
